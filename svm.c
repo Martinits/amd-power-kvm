@@ -52,6 +52,8 @@
 #include <asm/virtext.h>
 #include "trace.h"
 
+#include <linux/delay.h>
+
 #define __ex(x) __kvm_handle_fault_on_reboot(x)
 
 MODULE_AUTHOR("Qumranet");
@@ -5664,6 +5666,70 @@ static void svm_cancel_injection(struct kvm_vcpu *vcpu)
 	svm_complete_interrupts(svm);
 }
 
+#define APIC_ONESHOT
+
+#ifdef APIC_ONESHOT
+#define ONESHOT_IRQ_VEC 0xec // apic timer intr that linux normally uses
+#define APIC_LVTT_ONESHOT (0 << 17)
+#define APIC_ONESHOT_COUNTER 10
+#define APIC_LVTT_VEC_MASK 0x0ffUL;
+#define CORE_ENERGY_MSR 0x0C001029AULL
+
+static uint32_t apic_lvtt = 0x0, apic_tdcr = 0x0;
+atomic_t oneshot_interval = ATOMIC_INIT(0);
+EXPORT_SYMBOL(oneshot_interval);
+atomic_t oneshot_repeat = ATOMIC_INIT(0);
+EXPORT_SYMBOL(oneshot_repeat);
+static int interval = 0, repeat = 0, do_oneshot = 0;
+static u64 energy_start = 0, energy_stop = 0;
+static u64 total_energy = 0;
+static u64 rip1 = 0, rip2 = 0;
+
+static void apic_timer_oneshot(uint8_t vector, ulong cnt)
+{
+        /* Save APIC tmr config for later restore */
+        apic_lvtt = apic_read(APIC_LVTT);
+        apic_tdcr = apic_read(APIC_TDCR);
+
+        // use original intr vec
+        vector = apic_lvtt & APIC_LVTT_VEC_MASK;
+        apic_write(APIC_LVTT, vector | APIC_LVTT_ONESHOT);
+        apic_write(APIC_TDCR, APIC_TDR_DIV_2);
+        pr_info("oneshot div=2 cnt=%ld lvtt=0x%x tdcr=0x%x ict=0x%x\n",
+                cnt, apic_read(APIC_LVTT),
+                apic_read(APIC_TDCR), apic_read(APIC_TMICT));
+        mb();
+        apic_write(APIC_TMICT, cnt);
+        // apic_write(APIC_TMICT, APIC_ONESHOT_COUNTER);
+}
+
+static void apic_timer_deadline(void)
+{
+        ulong lvtt = apic_read(APIC_LVTT);
+        ulong tdcr = apic_read(APIC_TDCR);
+        ulong ict = apic_read(APIC_TMICT);
+        ulong cct = apic_read(APIC_TMCCT);
+        if (apic_lvtt){
+                mb();
+                apic_write(APIC_LVTT, apic_lvtt);
+                apic_write(APIC_TDCR, apic_tdcr);
+                // pr_info("Restored APIC_LVTT=%x TDCR=%x\n",
+                //         apic_read(APIC_LVTT), apic_read(APIC_TDCR));
+                apic_lvtt = apic_tdcr = 0x0;
+        }
+        pr_info("after vmrun: lvtt=0x%lx tdcr=0x%lx ict=0x%lx cct=0x%lx\n",
+                lvtt, tdcr, ict, cct);
+}
+
+static inline u64 pr_ret_rip(struct vcpu_svm* svm)
+{
+        u64 rip = svm->vmcb->save.rip;
+        pr_info("rip=%016llx\n", rip);
+        return rip;
+}
+
+#endif
+
 static void svm_vcpu_run(struct kvm_vcpu *vcpu)
 {
 	struct vcpu_svm *svm = to_svm(vcpu);
@@ -5717,6 +5783,27 @@ static void svm_vcpu_run(struct kvm_vcpu *vcpu)
 	x86_spec_ctrl_set_guest(svm->spec_ctrl, svm->virt_spec_ctrl);
 
 	local_irq_enable();
+
+#ifdef APIC_ONESHOT
+        if (!do_oneshot) {
+                interval = atomic_read(&oneshot_interval);
+                if(interval){
+                        repeat = atomic_read(&oneshot_repeat);
+                        atomic_set(&oneshot_interval, 0);
+                        do_oneshot = 1;
+                        rdmsrl(CORE_ENERGY_MSR, energy_start);
+                        mb();
+                        pr_info("oneshot start, energy=0x%016llx\n",
+                                energy_start);
+                }
+        }
+        if (do_oneshot) {
+                pr_info("repeat %d\n", repeat);
+                rip1 = pr_ret_rip(svm);
+                apic_timer_oneshot(ONESHOT_IRQ_VEC, interval);
+                ndelay(interval * 5); // suppose CLKIN of this CPU is 200MHz
+        }
+#endif
 
 	asm volatile (
 		"push %%" _ASM_BP "; \n\t"
@@ -5820,6 +5907,26 @@ static void svm_vcpu_run(struct kvm_vcpu *vcpu)
 #endif
 #endif
 
+#ifdef APIC_ONESHOT
+        if (do_oneshot) {
+                apic_timer_deadline();
+                rip2 = pr_ret_rip(svm);
+                if (rip1 != rip2){
+                        pr_info("rip move, skip");
+                }else{
+                        // pr_info("energy: start=0x%016llx, stop=0x%016llx, diff=%llu\n",
+                        //         energy_start, energy_stop, energy_stop-energy_start);
+                        // total_energy += energy_stop - energy_start;
+                        repeat--;
+                        if (repeat == 0){
+                                do_oneshot = 0;
+                                rdmsrl(CORE_ENERGY_MSR, energy_stop);
+                                total_energy = energy_stop - energy_start;
+                                pr_info("oneshot finish total_energy=%llu\n", total_energy);
+                        }
+                }
+        }
+#endif
 	/*
 	 * We do not use IBRS in the kernel. If this vCPU has used the
 	 * SPEC_CTRL MSR it may have left it on; save the value and
