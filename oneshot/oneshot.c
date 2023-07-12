@@ -11,15 +11,14 @@
 #define MODULE_NAME "oneshot"
 MODULE_LICENSE("GPL");
 
-extern atomic_t oneshot_interval;
-extern atomic_t oneshot_repeat;
+extern atomic_t oneshot_enable;
 
 ssize_t oneshot_proc_write(struct file *fp, const char __user *src,
                            size_t sz, loff_t *offset)
 {
         char buf[100] = {0};
         ulong copy = min(sz, sizeof(buf));
-        ulong interval = 0, repeat = 0;
+        ulong enable = 0;
 
         if (copy_from_user(buf, src, sz)){
                 pr_err("copy_from_user failed\n");
@@ -27,14 +26,15 @@ ssize_t oneshot_proc_write(struct file *fp, const char __user *src,
         }
 
         buf[copy] = 0;
-        if(2 != sscanf(buf, "%lu %lu", &interval, &repeat))
+        if(1 != sscanf(buf, "%lu", &enable))
                 return -EFAULT;
-        if (interval < 0)
-                interval = 0;
-
-        pr_info("oneshot goes interval=%lu repeat=%lu\n", interval, repeat);
-        atomic_set(&oneshot_repeat, repeat);
-        atomic_set(&oneshot_interval, interval);
+        if (enable) {
+                pr_info("oneshot enabled\n");
+                atomic_set(&oneshot_enable, 1);
+        } else {
+                pr_info("oneshot disabled\n");
+                atomic_set(&oneshot_enable, 0);
+        }
 
         return copy;
 }
