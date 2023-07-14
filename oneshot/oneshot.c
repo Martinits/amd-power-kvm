@@ -13,13 +13,14 @@ MODULE_LICENSE("GPL");
 
 extern atomic_t oneshot_interval;
 extern atomic_t oneshot_repeat;
+extern atomic_t oneshot_delay;
 
 ssize_t oneshot_proc_write(struct file *fp, const char __user *src,
                            size_t sz, loff_t *offset)
 {
         char buf[100] = {0};
         ulong copy = min(sz, sizeof(buf));
-        ulong interval = 0, repeat = 0;
+        ulong interval = 0, delay = 0, repeat = 0;
 
         if (copy_from_user(buf, src, sz)){
                 pr_err("copy_from_user failed\n");
@@ -27,13 +28,14 @@ ssize_t oneshot_proc_write(struct file *fp, const char __user *src,
         }
 
         buf[copy] = 0;
-        if(2 != sscanf(buf, "%lu %lu", &interval, &repeat))
+        if(3 != sscanf(buf, "%lu %lu %lu", &interval, &delay, &repeat))
                 return -EFAULT;
         if (interval < 0)
                 interval = 0;
 
-        pr_info("oneshot goes interval=%lu repeat=%lu\n", interval, repeat);
+        pr_info("oneshot goes interval=%lu delay=%lu repeat=%lu\n", interval, delay, repeat);
         atomic_set(&oneshot_repeat, repeat);
+        atomic_set(&oneshot_delay, delay);
         atomic_set(&oneshot_interval, interval);
 
         return copy;

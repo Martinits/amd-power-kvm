@@ -5680,10 +5680,13 @@ atomic_t oneshot_interval = ATOMIC_INIT(0);
 EXPORT_SYMBOL(oneshot_interval);
 atomic_t oneshot_repeat = ATOMIC_INIT(0);
 EXPORT_SYMBOL(oneshot_repeat);
-static int interval = 0, repeat = 0, do_oneshot = 0;
+atomic_t oneshot_delay = ATOMIC_INIT(0);
+EXPORT_SYMBOL(oneshot_delay);
+static int interval = 0, repeat = 0, do_oneshot = 0, delay = 0;
 static u64 energy_start = 0, energy_stop = 0;
 static u64 total_energy = 0;
 static u64 rip1 = 0, rip2 = 0;
+static int ripmove = 0, contrip = 0;
 
 static void apic_timer_oneshot(uint8_t vector, ulong cnt)
 {
@@ -5695,9 +5698,9 @@ static void apic_timer_oneshot(uint8_t vector, ulong cnt)
         vector = apic_lvtt & APIC_LVTT_VEC_MASK;
         apic_write(APIC_LVTT, vector | APIC_LVTT_ONESHOT);
         apic_write(APIC_TDCR, APIC_TDR_DIV_2);
-        pr_info("oneshot div=2 cnt=%ld lvtt=0x%x tdcr=0x%x ict=0x%x\n",
-                cnt, apic_read(APIC_LVTT),
-                apic_read(APIC_TDCR), apic_read(APIC_TMICT));
+        // pr_info("oneshot div=2 cnt=%ld lvtt=0x%x tdcr=0x%x ict=0x%x\n",
+        //         cnt, apic_read(APIC_LVTT),
+        //         apic_read(APIC_TDCR), apic_read(APIC_TMICT));
         mb();
         apic_write(APIC_TMICT, cnt);
         // apic_write(APIC_TMICT, APIC_ONESHOT_COUNTER);
@@ -5717,15 +5720,21 @@ static void apic_timer_deadline(void)
                 //         apic_read(APIC_LVTT), apic_read(APIC_TDCR));
                 apic_lvtt = apic_tdcr = 0x0;
         }
-        pr_info("after vmrun: lvtt=0x%lx tdcr=0x%lx ict=0x%lx cct=0x%lx\n",
-                lvtt, tdcr, ict, cct);
+        // pr_info("after vmrun: lvtt=0x%lx tdcr=0x%lx ict=0x%lx cct=0x%lx\n",
+        //         lvtt, tdcr, ict, cct);
 }
 
 static inline u64 pr_ret_rip(struct vcpu_svm* svm)
 {
         u64 rip = svm->vmcb->save.rip;
-        pr_info("rip=%016llx\n", rip);
+        // pr_info("rip=%016llx\n", rip);
         return rip;
+}
+
+static void delay_tenth_nsec(unsigned long tnsec)
+{
+        unsigned long xloops = (tnsec >> 1) - (tnsec >> 4);
+        __const_udelay(xloops);
 }
 
 #endif
@@ -5789,8 +5798,11 @@ static void svm_vcpu_run(struct kvm_vcpu *vcpu)
                 interval = atomic_read(&oneshot_interval);
                 if(interval){
                         repeat = atomic_read(&oneshot_repeat);
+                        delay = atomic_read(&oneshot_delay);
                         atomic_set(&oneshot_interval, 0);
                         do_oneshot = 1;
+                        ripmove = 0;
+                        contrip = 0;
                         rdmsrl(CORE_ENERGY_MSR, energy_start);
                         mb();
                         pr_info("oneshot start, energy=0x%016llx\n",
@@ -5798,10 +5810,11 @@ static void svm_vcpu_run(struct kvm_vcpu *vcpu)
                 }
         }
         if (do_oneshot) {
-                pr_info("repeat %d\n", repeat);
+                // pr_info("repeat %d\n", repeat);
                 rip1 = pr_ret_rip(svm);
                 apic_timer_oneshot(ONESHOT_IRQ_VEC, interval);
-                ndelay(interval * 5); // suppose CLKIN of this CPU is 200MHz
+                // ndelay(delay); // suppose CLKIN of this CPU is 200MHz
+                delay_tenth_nsec(delay);
         }
 #endif
 
@@ -5912,18 +5925,33 @@ static void svm_vcpu_run(struct kvm_vcpu *vcpu)
                 apic_timer_deadline();
                 rip2 = pr_ret_rip(svm);
                 if (rip1 != rip2){
-                        pr_info("rip move, skip");
+                        long long x = rip2-rip1;
+                        if(contrip != 0){
+                                pr_info("continuous rip %d\n", contrip);
+                                contrip = 0;
+                        }
+                        pr_info("repeat %d\n", repeat);
+                        pr_info("rip move from %016llx to %016llx\n",
+                                rip1, rip2);
+                        pr_info("diff %s%llx\n", x<0 ? "-" : "", x<0 ? -(unsigned)x : x);
+                        ripmove++;
                 }else{
+                        contrip++;
                         // pr_info("energy: start=0x%016llx, stop=0x%016llx, diff=%llu\n",
                         //         energy_start, energy_stop, energy_stop-energy_start);
                         // total_energy += energy_stop - energy_start;
-                        repeat--;
-                        if (repeat == 0){
-                                do_oneshot = 0;
-                                rdmsrl(CORE_ENERGY_MSR, energy_stop);
-                                total_energy = energy_stop - energy_start;
-                                pr_info("oneshot finish total_energy=%llu\n", total_energy);
+                }
+                repeat--;
+                if (repeat == 0){
+                        do_oneshot = 0;
+                        rdmsrl(CORE_ENERGY_MSR, energy_stop);
+                        total_energy = energy_stop - energy_start;
+                        if(contrip != 0){
+                                pr_info("continuous rip %d\n", contrip);
+                                contrip = 0;
                         }
+                        pr_info("oneshot finish total_energy=%llu\n", total_energy);
+                        pr_info("oneshot ripmove = %d\n", ripmove);
                 }
         }
 #endif
