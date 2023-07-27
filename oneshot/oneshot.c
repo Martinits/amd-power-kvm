@@ -33,7 +33,7 @@ ssize_t oneshot_proc_write(struct file *fp, const char __user *src,
         if (interval < 0)
                 interval = 0;
 
-        pr_info("oneshot goes interval=%lu delay=%lu repeat=%lu\n", interval, delay, repeat);
+        pr_info("oneshot starts with interval=%lu delay=%lu repeat=%lu\n", interval, delay, repeat);
         atomic_set(&oneshot_repeat, repeat);
         atomic_set(&oneshot_delay, delay);
         atomic_set(&oneshot_interval, interval);

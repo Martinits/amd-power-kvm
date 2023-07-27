@@ -1059,12 +1059,32 @@ bool kvm_cpuid(struct kvm_vcpu *vcpu, u32 *eax, u32 *ebx,
 }
 EXPORT_SYMBOL_GPL(kvm_cpuid);
 
+static void handle_oneshot_cpuid(struct kvm_vcpu *vcpu)
+{
+        extern int do_oneshot, got_cpuid;
+        extern u64 target_rip;
+	u32 eax, ebx, ecx;
+
+	eax = kvm_rax_read(vcpu);
+	ebx = kvm_rbx_read(vcpu);
+	ecx = kvm_rcx_read(vcpu);
+        if(do_oneshot && !got_cpuid && eax == 0x12345678UL){
+                got_cpuid = 1;
+                target_rip = ebx;
+                target_rip <<= 32;
+                target_rip |= ecx;
+                pr_info("got_cpuid: target_rip = %016llx\n", target_rip);
+        }
+}
+
 int kvm_emulate_cpuid(struct kvm_vcpu *vcpu)
 {
 	u32 eax, ebx, ecx, edx;
 
 	if (cpuid_fault_enabled(vcpu) && !kvm_require_cpl(vcpu, 0))
 		return 1;
+
+        handle_oneshot_cpuid(vcpu);
 
 	eax = kvm_rax_read(vcpu);
 	ecx = kvm_rcx_read(vcpu);
