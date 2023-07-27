@@ -1066,16 +1066,10 @@ EXPORT_SYMBOL(got_cpuid);
 EXPORT_SYMBOL(target_rip);
 static void handle_oneshot_cpuid(struct kvm_vcpu *vcpu)
 {
-	u32 eax, ebx, ecx;
-
-	eax = kvm_rax_read(vcpu);
-	ebx = kvm_rbx_read(vcpu);
-	ecx = kvm_rcx_read(vcpu);
-        if(do_oneshot && !got_cpuid && eax == 0x12345678UL){
+	u64 rax = kvm_rax_read(vcpu) | 0x0ffffffffULL;
+        if(do_oneshot && !got_cpuid && (rax == 0x12345678ULL)){
                 got_cpuid = 1;
-                target_rip = ebx;
-                target_rip <<= 32;
-                target_rip |= ecx;
+                target_rip = kvm_rcx_read(vcpu);
                 pr_info("got_cpuid: target_rip = %016llx\n", target_rip);
         }
 }
