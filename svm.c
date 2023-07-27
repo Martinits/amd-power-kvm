@@ -5683,14 +5683,14 @@ EXPORT_SYMBOL(oneshot_repeat);
 atomic_t oneshot_delay = ATOMIC_INIT(0);
 EXPORT_SYMBOL(oneshot_delay);
 static int interval = 0, repeat = 0, delay = 0;
-static int do_oneshot = 0, got_cpuid = 0;
-static u64 target_rip;
 static int got_target_rip = 0;
 static u64 energy_start = 0, energy_stop = 0;
 static u64 energy_diff = 0;
 static u64 rip1 = 0, rip2 = 0;
 static int ripmove = 0, contrip = 0;
 static u64 tip_tot_energy = 0, tip_tot_steps = 0;
+extern int do_oneshot, got_cpuid;
+extern u64 target_rip;
 
 static void apic_timer_oneshot(uint8_t vector, ulong cnt)
 {

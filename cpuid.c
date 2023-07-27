@@ -1059,10 +1059,13 @@ bool kvm_cpuid(struct kvm_vcpu *vcpu, u32 *eax, u32 *ebx,
 }
 EXPORT_SYMBOL_GPL(kvm_cpuid);
 
+int do_oneshot = 0, got_cpuid = 0;
+u64 target_rip;
+EXPORT_SYMBOL(do_oneshot);
+EXPORT_SYMBOL(got_cpuid);
+EXPORT_SYMBOL(target_rip);
 static void handle_oneshot_cpuid(struct kvm_vcpu *vcpu)
 {
-        extern int do_oneshot, got_cpuid;
-        extern u64 target_rip;
 	u32 eax, ebx, ecx;
 
 	eax = kvm_rax_read(vcpu);
