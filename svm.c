@@ -5735,12 +5735,6 @@ static inline u64 pr_ret_rip(struct vcpu_svm* svm)
         return rip;
 }
 
-static void delay_tenth_nsec(unsigned long tnsec)
-{
-        unsigned long xloops = (tnsec >> 1) - (tnsec >> 4);
-        __const_udelay(xloops);
-}
-
 static inline void tip_end_cont(void)
 {
         if(got_target_rip){
@@ -5836,8 +5830,7 @@ static void svm_vcpu_run(struct kvm_vcpu *vcpu)
                                 energy_start);
                 }
                 apic_timer_oneshot(ONESHOT_IRQ_VEC, interval);
-                // ndelay(delay); // suppose CLKIN of this CPU is 200MHz
-                delay_tenth_nsec(delay);
+                ndelay(delay); // suppose CLKIN of this CPU is 200MHz
         }
 #endif
 
