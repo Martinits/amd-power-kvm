@@ -1066,7 +1066,7 @@ EXPORT_SYMBOL(got_cpuid);
 EXPORT_SYMBOL(target_rip);
 static void handle_oneshot_cpuid(struct kvm_vcpu *vcpu)
 {
-	u64 rax = kvm_rax_read(vcpu) | 0x0ffffffffULL;
+	u64 rax = kvm_rax_read(vcpu) & 0x0ffffffffULL;
         if(do_oneshot && !got_cpuid && (rax == 0x12345678ULL)){
                 got_cpuid = 1;
                 target_rip = kvm_rcx_read(vcpu);
