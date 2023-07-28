@@ -5719,10 +5719,10 @@ static void apic_timer_oneshot(uint8_t vector, ulong cnt)
 
 static void apic_timer_deadline(void)
 {
-        ulong lvtt = apic_read(APIC_LVTT);
-        ulong tdcr = apic_read(APIC_TDCR);
-        ulong ict = apic_read(APIC_TMICT);
-        ulong cct = apic_read(APIC_TMCCT);
+        // ulong lvtt = apic_read(APIC_LVTT);
+        // ulong tdcr = apic_read(APIC_TDCR);
+        // ulong ict = apic_read(APIC_TMICT);
+        // ulong cct = apic_read(APIC_TMCCT);
         if (apic_lvtt){
                 mb();
                 apic_write(APIC_LVTT, apic_lvtt);
