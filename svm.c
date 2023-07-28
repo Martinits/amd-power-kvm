@@ -5691,6 +5691,13 @@ static int ripmove = 0, contrip = 0;
 static u64 tip_tot_energy = 0, tip_tot_steps = 0;
 extern int do_oneshot, got_cpuid;
 extern u64 target_rip;
+DECLARE_WAIT_QUEUE_HEAD(wq);
+EXPORT_SYMBOL(wq);
+u64 res_steps = 0, res_energy = 0;
+EXPORT_SYMBOL(res_steps);
+EXPORT_SYMBOL(res_energy);
+atomic_t oneshot_finish = ATOMIC_INIT(0);
+EXPORT_SYMBOL(oneshot_finish);
 
 static void apic_timer_oneshot(uint8_t vector, ulong cnt)
 {
@@ -5969,6 +5976,8 @@ static void svm_vcpu_run(struct kvm_vcpu *vcpu)
                         pr_info("oneshot finishes ripmove = %d\n", ripmove);
                         pr_info("target_rip zero steps %llu, total energy %llu\n",
                                 tip_tot_steps, tip_tot_energy);
+                        atomic_set(&oneshot_finish, 1);
+                        wake_up_interruptible(&wq);
                 }
         }
 #endif
