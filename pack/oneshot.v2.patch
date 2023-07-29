@@ -1,0 +1,228 @@
+diff --git a/cpuid.c b/cpuid.c
+index db38386..cf6dbd1 100644
+--- a/cpuid.c
++++ b/cpuid.c
+@@ -1059,6 +1059,21 @@ bool kvm_cpuid(struct kvm_vcpu *vcpu, u32 *eax, u32 *ebx,
+ }
+ EXPORT_SYMBOL_GPL(kvm_cpuid);
+ 
++int do_oneshot = 0, got_cpuid = 0;
++u64 target_rip;
++EXPORT_SYMBOL(do_oneshot);
++EXPORT_SYMBOL(got_cpuid);
++EXPORT_SYMBOL(target_rip);
++static void handle_oneshot_cpuid(struct kvm_vcpu *vcpu)
++{
++	u64 rax = kvm_rax_read(vcpu) & 0x0ffffffffULL;
++        if(do_oneshot && !got_cpuid && (rax == 0x12345678ULL)){
++                got_cpuid = 1;
++                target_rip = kvm_rcx_read(vcpu);
++                pr_info("got_cpuid: target_rip = %016llx\n", target_rip);
++        }
++}
++
+ int kvm_emulate_cpuid(struct kvm_vcpu *vcpu)
+ {
+ 	u32 eax, ebx, ecx, edx;
+@@ -1066,6 +1081,8 @@ int kvm_emulate_cpuid(struct kvm_vcpu *vcpu)
+ 	if (cpuid_fault_enabled(vcpu) && !kvm_require_cpl(vcpu, 0))
+ 		return 1;
+ 
++        handle_oneshot_cpuid(vcpu);
++
+ 	eax = kvm_rax_read(vcpu);
+ 	ecx = kvm_rcx_read(vcpu);
+ 	kvm_cpuid(vcpu, &eax, &ebx, &ecx, &edx, true);
+diff --git a/svm.c b/svm.c
+index b51a34e..2835297 100644
+--- a/svm.c
++++ b/svm.c
+@@ -52,6 +52,8 @@
+ #include <asm/virtext.h>
+ #include "trace.h"
+ 
++#include <linux/delay.h>
++
+ #define __ex(x) __kvm_handle_fault_on_reboot(x)
+ 
+ MODULE_AUTHOR("Qumranet");
+@@ -5664,6 +5666,96 @@ static void svm_cancel_injection(struct kvm_vcpu *vcpu)
+ 	svm_complete_interrupts(svm);
+ }
+ 
++#define APIC_ONESHOT
++
++#ifdef APIC_ONESHOT
++#define ONESHOT_IRQ_VEC 0xec // apic timer intr that linux normally uses
++#define APIC_LVTT_ONESHOT (0 << 17)
++#define APIC_ONESHOT_COUNTER 10
++#define APIC_LVTT_VEC_MASK 0x0ffUL;
++#define CORE_ENERGY_MSR 0x0C001029AULL
++
++static uint32_t apic_lvtt = 0x0, apic_tdcr = 0x0;
++atomic_t oneshot_interval = ATOMIC_INIT(0);
++EXPORT_SYMBOL(oneshot_interval);
++atomic_t oneshot_repeat = ATOMIC_INIT(0);
++EXPORT_SYMBOL(oneshot_repeat);
++atomic_t oneshot_delay = ATOMIC_INIT(0);
++EXPORT_SYMBOL(oneshot_delay);
++static int interval = 0, repeat = 0, delay = 0;
++static int got_target_rip = 0;
++static u64 energy_start = 0, energy_stop = 0;
++static u64 energy_diff = 0;
++static u64 rip1 = 0, rip2 = 0;
++static int ripmove = 0, contrip = 0;
++static u64 tip_tot_energy = 0, tip_tot_steps = 0;
++extern int do_oneshot, got_cpuid;
++extern u64 target_rip;
++DECLARE_WAIT_QUEUE_HEAD(wq);
++EXPORT_SYMBOL(wq);
++u64 res_steps = 0, res_energy = 0;
++EXPORT_SYMBOL(res_steps);
++EXPORT_SYMBOL(res_energy);
++atomic_t oneshot_finish = ATOMIC_INIT(0);
++EXPORT_SYMBOL(oneshot_finish);
++
++static void apic_timer_oneshot(uint8_t vector, ulong cnt)
++{
++        /* Save APIC tmr config for later restore */
++        apic_lvtt = apic_read(APIC_LVTT);
++        apic_tdcr = apic_read(APIC_TDCR);
++
++        // use original intr vec
++        vector = apic_lvtt & APIC_LVTT_VEC_MASK;
++        apic_write(APIC_LVTT, vector | APIC_LVTT_ONESHOT);
++        apic_write(APIC_TDCR, APIC_TDR_DIV_2);
++        // pr_info("oneshot div=2 cnt=%ld lvtt=0x%x tdcr=0x%x ict=0x%x\n",
++        //         cnt, apic_read(APIC_LVTT),
++        //         apic_read(APIC_TDCR), apic_read(APIC_TMICT));
++        mb();
++        apic_write(APIC_TMICT, cnt);
++        // apic_write(APIC_TMICT, APIC_ONESHOT_COUNTER);
++}
++
++static void apic_timer_deadline(void)
++{
++        // ulong lvtt = apic_read(APIC_LVTT);
++        // ulong tdcr = apic_read(APIC_TDCR);
++        // ulong ict = apic_read(APIC_TMICT);
++        // ulong cct = apic_read(APIC_TMCCT);
++        if (apic_lvtt){
++                mb();
++                apic_write(APIC_LVTT, apic_lvtt);
++                apic_write(APIC_TDCR, apic_tdcr);
++                // pr_info("Restored APIC_LVTT=%x TDCR=%x\n",
++                //         apic_read(APIC_LVTT), apic_read(APIC_TDCR));
++                apic_lvtt = apic_tdcr = 0x0;
++        }
++        // pr_info("after vmrun: lvtt=0x%lx tdcr=0x%lx ict=0x%lx cct=0x%lx\n",
++        //         lvtt, tdcr, ict, cct);
++}
++
++static inline u64 pr_ret_rip(struct vcpu_svm* svm)
++{
++        u64 rip = svm->vmcb->save.rip;
++        // pr_info("rip=%016llx\n", rip);
++        return rip;
++}
++
++static inline void tip_end_cont(void)
++{
++        if(got_target_rip){
++                energy_diff = energy_stop - energy_start;
++                pr_info("target_rip end cont %d, energy_diff=%llu\n",
++                        contrip, energy_diff);
++                tip_tot_steps += contrip;
++                tip_tot_energy += energy_diff;
++                got_target_rip = 0;
++        }
++}
++
++#endif
++
+ static void svm_vcpu_run(struct kvm_vcpu *vcpu)
+ {
+ 	struct vcpu_svm *svm = to_svm(vcpu);
+@@ -5718,6 +5810,37 @@ static void svm_vcpu_run(struct kvm_vcpu *vcpu)
+ 
+ 	local_irq_enable();
+ 
++#ifdef APIC_ONESHOT
++        if (!do_oneshot) {
++                interval = atomic_read(&oneshot_interval);
++                if(interval){
++                        repeat = atomic_read(&oneshot_repeat);
++                        delay = atomic_read(&oneshot_delay);
++                        atomic_set(&oneshot_interval, 0);
++                        ripmove = 0;
++                        contrip = 0;
++                        got_cpuid = 0;
++                        do_oneshot = 1;
++                        tip_tot_steps = 0;
++                        tip_tot_energy = 0;
++                        got_target_rip = 0;
++                }
++        }
++        if (do_oneshot && got_cpuid) {
++                // pr_info("repeat %d\n", repeat);
++                rip1 = pr_ret_rip(svm);
++                if(!got_target_rip && rip1 == target_rip){
++                        rdmsrl(CORE_ENERGY_MSR, energy_start);
++                        mb();
++                        got_target_rip = 1;
++                        pr_info("got target rip, energy start=0x%016llx\n",
++                                energy_start);
++                }
++                apic_timer_oneshot(ONESHOT_IRQ_VEC, interval);
++                ndelay(delay); // suppose CLKIN of this CPU is 200MHz
++        }
++#endif
++
+ 	asm volatile (
+ 		"push %%" _ASM_BP "; \n\t"
+ 		"mov %c[rbx](%[svm]), %%" _ASM_BX " \n\t"
+@@ -5820,6 +5943,44 @@ static void svm_vcpu_run(struct kvm_vcpu *vcpu)
+ #endif
+ #endif
+ 
++#ifdef APIC_ONESHOT
++        if (do_oneshot && got_cpuid) {
++                apic_timer_deadline();
++                // whatever happens we just read it
++                rdmsrl(CORE_ENERGY_MSR, energy_stop);
++                rip2 = pr_ret_rip(svm);
++                if (rip1 != rip2){
++                        long long x = rip2-rip1;
++                        if(contrip != 0){
++                                pr_info("continuous rip %d\n", contrip);
++                                tip_end_cont();
++                        }
++                        pr_info("repeat %d\n", repeat);
++                        pr_info("rip move from %016llx to %016llx\n",
++                                rip1, rip2);
++                        pr_info("diff %s%llx\n", x<0 ? "-" : "", x<0 ? -(unsigned)x : x);
++
++                        ripmove++;
++                        contrip = 0;
++                }else{
++                        contrip++;
++                }
++                repeat--;
++                if (repeat == 0){
++                        do_oneshot = 0;
++                        if(contrip != 0){
++                                pr_info("continuous rip %d\n", contrip);
++                                tip_end_cont();
++                                contrip = 0;
++                        }
++                        pr_info("oneshot finishes ripmove = %d\n", ripmove);
++                        pr_info("target_rip zero steps %llu, total energy %llu\n",
++                                tip_tot_steps, tip_tot_energy);
++                        atomic_set(&oneshot_finish, 1);
++                        wake_up_interruptible(&wq);
++                }
++        }
++#endif
+ 	/*
+ 	 * We do not use IBRS in the kernel. If this vCPU has used the
+ 	 * SPEC_CTRL MSR it may have left it on; save the value and

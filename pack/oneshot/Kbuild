@@ -1,0 +1,5 @@
+KBUILD_EXTRA_SYMBOLS=/home/wubing/lwb/linux-5.4.0/arch/x86/kvm/Module.symvers
+
+ccflags-y = -Wno-unused-function -Wno-unused-variable
+
+obj-m = oneshot.o

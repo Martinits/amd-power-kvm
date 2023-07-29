@@ -1,0 +1,39 @@
+### Oneshot Usage
+
+- `apt install linux-source-5.4.0`
+- Then kernel source in at /usr/src/linux-source-5.4.0/linux-source-5.4.0.tar.bz2
+- Copy that, extract to somewhere, compile
+- patch kvm
+  - `cd arch/x86/kvm `
+  - `patch < oneshot.v2.patch`
+- add oneshot kmod
+  - `mv oneshot arch/x86/kvm`
+- compile kvm
+  - return to kernel source root
+  - `make M=arch/x86/kvm modules -j`
+  - `make M=arch/x86/kvm/oneshot modules -j`
+- insmod
+  - `rmmod oneshot kvm_amd kvm`
+  - `cd arch/x86/kvm `
+  - `insmod kvm.ko && insmod kvm-amd.ko sev=1`
+  - `insmod oneshot/oneshot.ko`
+- create vm
+  - qcow2 and OVMF images can be found at /home/wubing/oneshot
+    - edit the xml with where you place those 3 images
+  - `virsh create ubuntu-sev.xml`
+  - `virsh console ubuntu-sev`
+    - enter vm and make sure there's internet with `dhclient enp5s0`
+    - remember its ip (192.168.122.*)
+- prepare test script
+  - `gcc victim.c -o victim`
+  - copy the compiled `victim` and `guest.py` to vm
+- run
+  - first on host: run `./host.py`
+  - then on guest: run `./guest.py <addr> <interval> <delay> <repeat>`
+  - `addr` is the virtual relative (position independent) addr of `victim` that you want to zero step (test energy) on
+    - use `objdump -d victim` to get addr
+  - `interval` is the countdown number of APIC, for example 40
+  - `delay` is the nanosecond delay between APIC starts countdown and kvm enters guest with `vmrun`, you may need to try multiple times to get a reasonable one,  for example 500
+  - `repeat` is the try times of zero-steps that you want, for example 10000
+  - then you will get results printed out by `guest.py`
+- see dmesg for more info
