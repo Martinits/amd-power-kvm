@@ -59,6 +59,10 @@ ssize_t oneshot_proc_read(struct file *fp, char __user *to,
 
         *(u64*)buf = res_steps;
         *(u64*)(buf + sizeof(u64)) = res_energy;
+        if(copy_to_user(to, buf, 2 * sizeof(u64))){
+                pr_err("copy_to_user failed\n");
+                return -EFAULT;
+        }
 
         return 2 * sizeof(u64);
 }
